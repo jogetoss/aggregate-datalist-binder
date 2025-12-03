@@ -2,6 +2,21 @@
 
 The Aggregate Datalist Binder plugin is a new datalist 'data source' binder to generate an aggregated report from your selected form.
 
+There are five aggregate data functions you can select from the datalist designer column palette:
+
+- Average
+- Count
+- Maximum
+- Mininum
+- Sum
+  
+Non-aggregate column(s) selected in the datalist design is automatically set as "GROUP BY" in the database query.
+
+Note:
+
+- Filters are not supported if you use this datalist binder plugin.
+- This datalist binder plugin is designed for MySQL database only.
+
 # Getting Help
 
 JogetOSS is a community-led team for open source software related to the [Joget](https://www.joget.org) no-code/low-code application platform.
