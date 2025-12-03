@@ -18,16 +18,13 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-//import java.util.Properties;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
-//import oracle.sql.TIMESTAMP;
 import org.apache.commons.beanutils.BeanUtils;
 import org.hibernate.dialect.function.SQLFunction;
 import org.hibernate.engine.spi.SessionFactoryImplementor;
-import org.hibernate.type.StandardBasicTypes;
-//import org.hibernate.type.Type;
+import java.lang.reflect.Method;
 import org.joget.apps.app.model.AppDefinition;
 import org.joget.apps.app.service.AppUtil;
 import org.joget.apps.datalist.model.DataList;
@@ -41,6 +38,7 @@ import org.joget.commons.util.LogUtil;
 import org.joget.commons.util.ResourceBundleUtil;
 import org.joget.commons.util.UuidGenerator;
 import org.springframework.orm.hibernate4.LocalSessionFactoryBean;
+import org.hibernate.type.StandardBasicTypes;
 
 public class AggregateDatalistBinder extends DataListBinderDefault{
     
@@ -64,7 +62,7 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
 
     @Override
     public String getVersion() {
-        return "5.0.0";
+        return "8.0.1";
     }
 
     @Override
@@ -385,6 +383,31 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
         
         return processFilterQueryObjects(filterQueryObjects);
     }
+
+    protected String renderFunction(SQLFunction function, List args, SessionFactoryImplementor factory) {
+        try {
+            // Hibernate 4 signature
+            return (String) function.getClass()
+                    .getMethod("render", org.hibernate.type.Type.class, List.class, SessionFactoryImplementor.class)
+                    .invoke(function, StandardBasicTypes.STRING, args, factory);
+        } catch (NoSuchMethodException ex) {
+            try {
+                // Hibernate 5 signature
+                Object typeConfig = factory.getClass().getMethod("getTypeConfiguration").invoke(factory);
+
+                return (String) function.getClass()
+                    .getMethod("render", 
+                        Class.forName("org.hibernate.type.spi.TypeConfiguration"), 
+                        List.class)
+                    .invoke(function, typeConfig, args);
+            } catch (Exception e) {
+                LogUtil.error(getClassName(), e, "Unable to render SQLFunction");
+            }
+        } catch (Exception ex) {
+            LogUtil.error(getClassName(), ex, "");
+        }
+        return null;
+    }
     
     protected String processFunction(SessionFactoryImplementor factory, Map functions, String query) {
         String tempQuery = query;
@@ -414,8 +437,13 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
             
             SQLFunction sqlFunction = (SQLFunction) functions.get(functionName);
             if (sqlFunction != null) {
-                String resultedQuery = sqlFunction.render(StandardBasicTypes.STRING, args, factory);
-                usedFunctions.put(uuid, resultedQuery);
+                String resultedQuery = renderFunction(sqlFunction, args, factory);
+
+                if (resultedQuery != null) {
+                    usedFunctions.put(uuid, resultedQuery);
+                } else {
+                    usedFunctions.put(uuid, functionString);
+                }
             } else {
                 usedFunctions.put(uuid, functionString);
             }
