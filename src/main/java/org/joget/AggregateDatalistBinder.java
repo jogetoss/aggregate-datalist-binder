@@ -187,42 +187,41 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
         return columns.toArray(new DataListColumn[0]);
     }
     
-    protected String getQuerySelect(DataList dataList, Map properties, DataListFilterQueryObject filterQueryObject, String sort, Boolean desc, Integer start, Integer rows) {
-        //TODO: use proper SQL parser to handle sorting and filtering
-        String selectColumns = "";
-        String groupColumns = "";
-        
-        String formDefId = getPropertyString("formDefId");
-        String tableName = getTableName(formDefId);
-        
+    /** Returns {selectColumns, groupColumns}; aggregate and COUNT(*) columns are excluded from GROUP BY. */
+    protected String[] buildSelectAndGroupColumns(DataList dataList) {
+        List<String> select = new ArrayList<String>();
+        List<String> group = new ArrayList<String>();
         DataListColumn[] columns = dataList.getColumns();
         if (columns != null) {
             for (DataListColumn column : columns) {
-                String columnName = "";
-                columnName = column.getName();
-                //columnName = columnName.replace("'", "");
-                
-                if(column.getName().startsWith("AVG_c_") || column.getName().startsWith("SUM_c_") || 
-                   column.getName().startsWith("MIN_c_") || column.getName().startsWith("MAX_c_") || 
-                   column.getName().startsWith("COUNT_c_")){
-                    //columnName = columnName.replace("_c_", "(c_") + ")";
-                    columnName = columnName.replace("_c_", "( CAST( c_") + " AS DECIMAL(20,2) ) )";
-                    selectColumns += columnName + " AS " + column.getName() + ",";
-                }else{
-                    selectColumns += columnName + ",";
-                    groupColumns += columnName + ",";
+                String name = column.getName();
+                if ("count".equalsIgnoreCase(name)) {
+                    select.add("COUNT(*) AS " + name);
+                } else if (name.startsWith("AVG_c_") || name.startsWith("SUM_c_") || name.startsWith("MIN_c_")
+                        || name.startsWith("MAX_c_") || name.startsWith("COUNT_c_")) {
+                    select.add(name.replace("_c_", "( CAST( c_") + " AS DECIMAL(20,2) ) ) AS " + name);
+                } else {
+                    select.add(name);
+                    group.add(name);
                 }
             }
         }
-        selectColumns = selectColumns.substring(0, selectColumns.length()-1);
-        groupColumns = groupColumns.substring(0, groupColumns.length()-1);
+        return new String[]{String.join(",", select), String.join(",", group)};
+    }
+    
+    protected String getQuerySelect(DataList dataList, Map properties, DataListFilterQueryObject filterQueryObject, String sort, Boolean desc, Integer start, Integer rows) {
+        //TODO: use proper SQL parser to handle sorting and filtering
+        String formDefId = getPropertyString("formDefId");
+        String tableName = getTableName(formDefId);
+        String[] parts = buildSelectAndGroupColumns(dataList);
+        String selectColumns = parts[0];
+        String groupColumns = parts[1];
         
         String sql = "app_fd_" + tableName;
         
-        if(groupColumns.equalsIgnoreCase("")){
-            //select all
+        if (selectColumns.isEmpty()) {
             sql = "SELECT * FROM " + sql + " " + ALIAS;
-        }else{
+        } else {
             sql = "SELECT " + selectColumns + " FROM " + sql + " " + ALIAS;
         }
         
@@ -647,29 +646,7 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
         String tableName = getTableName(formDefId);
         String sql = "SELECT COUNT(*) FROM app_fd_" + tableName + " " + ALIAS;
         
-        String selectColumns = "";
-        String groupColumns = "";
-        DataListColumn[] columns = dataList.getColumns();
-        if (columns != null) {
-            for (DataListColumn column : columns) {
-                String columnName = "";
-                columnName = column.getName();
-                //columnName = columnName.replace("'", "");
-                
-                if(column.getName().startsWith("AVG_c_") || column.getName().startsWith("SUM_c_") || 
-                   column.getName().startsWith("MIN_c_") || column.getName().startsWith("MAX_c_") || 
-                   column.getName().startsWith("COUNT_c_")){
-                    //columnName = columnName.replace("_c_", "(c_") + ")";
-                    columnName = columnName.replace("_c_", "( CAST( c_") + " AS DECIMAL(20,2) ) )";
-                    selectColumns += columnName + " AS " + column.getName() + ",";
-                }else{
-                    selectColumns += columnName + ",";
-                    groupColumns += columnName + ",";
-                }
-            }
-        }
-        selectColumns = selectColumns.substring(0, selectColumns.length()-1);
-        groupColumns = groupColumns.substring(0, groupColumns.length()-1);
+        String groupColumns = buildSelectAndGroupColumns(dataList)[1];
         
         sql = insertQueryCriteria(sql, properties, filterQueryObject);
         
