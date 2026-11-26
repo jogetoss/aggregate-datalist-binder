@@ -22,8 +22,6 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import javax.sql.DataSource;
 import org.apache.commons.beanutils.BeanUtils;
-import org.hibernate.dialect.function.SQLFunction;
-import org.hibernate.engine.spi.SessionFactoryImplementor;
 import java.lang.reflect.Method;
 import org.joget.apps.app.model.AppDefinition;
 import org.joget.apps.app.service.AppUtil;
@@ -37,8 +35,6 @@ import org.joget.apps.userview.model.Userview;
 import org.joget.commons.util.LogUtil;
 import org.joget.commons.util.ResourceBundleUtil;
 import org.joget.commons.util.UuidGenerator;
-import org.springframework.orm.hibernate4.LocalSessionFactoryBean;
-import org.hibernate.type.StandardBasicTypes;
 
 public class AggregateDatalistBinder extends DataListBinderDefault{
     
@@ -62,7 +58,7 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
 
     @Override
     public String getVersion() {
-        return "8.0.1";
+        return "8.0.2";
     }
 
     @Override
@@ -281,7 +277,16 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
         }
         
         if (filterQueryObject != null && filterQueryObject.getQuery() != null && filterQueryObject.getQuery().trim().length() > 0) {
-            condition += filterQueryObject.getQuery();
+            String filterQuery = filterQueryObject.getQuery().trim();
+            if (filterQuery.toUpperCase().startsWith("WHERE ")) {
+                filterQuery = filterQuery.substring(6).trim();
+            }
+            if (condition.trim().length() > 0) {
+                condition += " AND ";
+            } else {
+                condition += " WHERE ";
+            }
+            condition += filterQuery;
         }
 //
 //        if (sql.contains(USERVIEW_KEY_SYNTAX)) {
@@ -384,100 +389,105 @@ public class AggregateDatalistBinder extends DataListBinderDefault{
         return processFilterQueryObjects(filterQueryObjects);
     }
 
-    protected String renderFunction(SQLFunction function, List args, SessionFactoryImplementor factory) {
-        try {
-            // Hibernate 4 signature
-            return (String) function.getClass()
-                    .getMethod("render", org.hibernate.type.Type.class, List.class, SessionFactoryImplementor.class)
-                    .invoke(function, StandardBasicTypes.STRING, args, factory);
-        } catch (NoSuchMethodException ex) {
-            try {
-                // Hibernate 5 signature
-                Object typeConfig = factory.getClass().getMethod("getTypeConfiguration").invoke(factory);
+    /**
+     * Database family of the binder's datasource, used to render the SQL functions that Joget's filter types
+     * put in their conditions (lower, cast(... as big_decimal), concat, substring).
+     */
+    protected String getDatabaseType() {
+        String d = getDriver();
+        d = d != null ? d.toLowerCase() : "";
+        if (d.contains("sqlserver")) return "mssql";
+        if (d.contains("oracle")) return "oracle";
+        if (d.contains("postgresql")) return "postgresql";
+        return "mysql";
+    }
 
-                return (String) function.getClass()
-                    .getMethod("render", 
-                        Class.forName("org.hibernate.type.spi.TypeConfiguration"), 
-                        List.class)
-                    .invoke(function, typeConfig, args);
-            } catch (Exception e) {
-                LogUtil.error(getClassName(), e, "Unable to render SQLFunction");
+    /** SQL type for a Hibernate-style cast target used by Joget filters (e.g. big_decimal, string). */
+    protected String renderCastType(String type, String db) {
+        String t = type.trim().toLowerCase();
+        if ("big_decimal".equals(t) || "bigdecimal".equals(t) || "double".equals(t) || "float".equals(t)) {
+            if ("mysql".equals(db)) return "decimal(65,10)";
+            if ("mssql".equals(db)) return "decimal(38,10)";
+            if ("oracle".equals(db)) return "number";
+            return "numeric";
+        }
+        if ("string".equals(t) || "text".equals(t)) {
+            if ("mysql".equals(db)) return "char";
+            if ("mssql".equals(db)) return "nvarchar(max)";
+            if ("oracle".equals(db)) return "varchar2(4000)";
+            return "varchar";
+        }
+        if ("integer".equals(t) || "int".equals(t) || "long".equals(t) || "big_integer".equals(t)) {
+            if ("mysql".equals(db)) return "signed";
+            if ("oracle".equals(db)) return "number";
+            return "bigint";
+        }
+        if ("timestamp".equals(t)) {
+            return "mysql".equals(db) ? "datetime" : ("mssql".equals(db) ? "datetime2" : "timestamp");
+        }
+        return type.trim();
+    }
+
+    /**
+     * Renders one function call for the target database. Returns null to keep the call as written.
+     */
+    protected String renderFunction(String name, List<String> args, String db) {
+        if ("cast".equals(name) && args.size() == 2) {
+            return "cast(" + args.get(0) + " as " + renderCastType(args.get(1), db) + ")";
+        }
+        if ("concat".equals(name) && "oracle".equals(db) && args.size() > 1) {
+            StringBuilder sb = new StringBuilder("(");
+            for (int i = 0; i < args.size(); i++) {
+                if (i > 0) sb.append(" || ");
+                sb.append(args.get(i));
             }
-        } catch (Exception ex) {
-            LogUtil.error(getClassName(), ex, "");
+            return sb.append(")").toString();
+        }
+        if ("substring".equals(name) && "oracle".equals(db)) {
+            return "substr(" + String.join(", ", args) + ")";
         }
         return null;
     }
-    
-    protected String processFunction(SessionFactoryImplementor factory, Map functions, String query) {
+
+    protected String processFunction(String db, String query) {
         String tempQuery = query;
-        Map<String, String> usedFunctions = new HashMap<String, String>(); 
-        Pattern pattern = Pattern.compile("([a-zA-z0-9]+)\\(([^\\(^\\)]*)\\)");
+        Map<String, String> usedFunctions = new HashMap<String, String>();
+        Pattern pattern = Pattern.compile("([a-zA-Z0-9_]+)\\(([^\\(\\)]*)\\)");
+        Pattern asPattern = Pattern.compile("\\s+as\\s+", Pattern.CASE_INSENSITIVE);
         Matcher matcher = pattern.matcher(query);
-        
+
         while (matcher.find()) {
-            String uuid = "function_" + UuidGenerator.getInstance().getUuid();
+            String uuid = "function_" + UuidGenerator.getInstance().getUuid().replace("-", "");
             String functionString = matcher.group(0);
             String functionName = matcher.group(1).toLowerCase();
-            String agrsString = matcher.group(2);
+            String argsString = matcher.group(2);
             tempQuery = tempQuery.replace(functionString, uuid);
-            
-            List args = new ArrayList();
-            String[] agrsArray;
-            if (agrsString.contains(" as ")) {
-                agrsArray = agrsString.split(" as ");
-            } else {
-                agrsArray = agrsString.split(",");
-            }
-            if (agrsArray.length > 0) {
-                for (String agr : agrsArray) {
-                    args.add(agr.trim());
-                }
-            }
-            
-            SQLFunction sqlFunction = (SQLFunction) functions.get(functionName);
-            if (sqlFunction != null) {
-                String resultedQuery = renderFunction(sqlFunction, args, factory);
 
-                if (resultedQuery != null) {
-                    usedFunctions.put(uuid, resultedQuery);
-                } else {
-                    usedFunctions.put(uuid, functionString);
-                }
-            } else {
-                usedFunctions.put(uuid, functionString);
+            List<String> args = new ArrayList<String>();
+            String[] argsArray = "cast".equals(functionName) ? asPattern.split(argsString, 2) : argsString.split(",");
+            for (String arg : argsArray) {
+                args.add(arg.trim());
             }
-        }  
-        
+
+            String rendered = renderFunction(functionName, args, db);
+            usedFunctions.put(uuid, rendered != null ? rendered : functionString);
+        }
+
         if (!usedFunctions.isEmpty()) {
-            tempQuery = processFunction(factory, functions, tempQuery);
-            
-            for (String key : usedFunctions.keySet()) {
-                tempQuery = tempQuery.replace(key, usedFunctions.get(key));
+            tempQuery = processFunction(db, tempQuery);
+
+            for (Map.Entry<String, String> e : usedFunctions.entrySet()) {
+                tempQuery = tempQuery.replace(e.getKey(), e.getValue());
             }
         }
-        
+
         return tempQuery;
     }
-    
+
     protected String processQuery(DataSource ds, String query) {
         if (query != null && !query.isEmpty()) {
-            LocalSessionFactoryBean sf = new LocalSessionFactoryBean();
-            try {
-                sf.setDataSource(ds);
-                try {
-                    sf.afterPropertiesSet();
-                } catch (Exception ex) {
-                    LogUtil.error(this.getClassName(), ex, "Error initializing session factory");
-                }
-                SessionFactoryImplementor factory = (SessionFactoryImplementor) sf.getObject();
-                Map functions = factory.getDialect().getFunctions();
-                query = processFunction(factory, functions, query);
-            } finally {
-                sf.destroy();
-            }
+            query = processFunction(getDatabaseType(), query);
         }
-        
         return query;
     }
     

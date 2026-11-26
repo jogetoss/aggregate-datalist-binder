@@ -4,7 +4,7 @@
     <groupId>org.joget</groupId>
     <artifactId>adbinder</artifactId>
     <packaging>bundle</packaging>
-    <version>8.0.1</version>
+    <version>8.0.2</version>
     <name>adbinder</name>
     <url>http://www.joget.org</url>
     <build>
@@ -89,16 +89,6 @@
                 </exclusion>
             </exclusions>
             <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.hibernate</groupId>
-            <artifactId>hibernate-core</artifactId>
-            <version>4.3.9.Final</version>
-        </dependency>
-        <dependency>
-            <groupId>org.hibernate</groupId>
-            <artifactId>hibernate-entitymanager</artifactId>
-            <version>4.3.9.Final</version>
         </dependency>
         <!-- Change plugin specific dependencies here -->
         <dependency>
