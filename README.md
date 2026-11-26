@@ -13,8 +13,6 @@ There are five aggregate data functions you can select from the datalist designe
 Non-aggregate column(s) selected in the datalist design is automatically set as "GROUP BY" in the database query.
 
 Note:
-
-- Filters are not supported if you use this datalist binder plugin.
 - This datalist binder plugin is designed for MySQL database only.
 
 # Getting Help
